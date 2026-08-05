@@ -808,6 +808,7 @@ function speak(text,lang){
   var isEn=(lang==='en-US'||lang==='en');
 
   if(_isMobile){
+    /* 百度翻译TTS(中文) + 有道词典TTS(英文) */
     var baiduFanyiUrl='https://fanyi.baidu.com/gettts?lan='+(isEn?'en':'zh')+'&text='+encodeURIComponent(text)+'&spd=3&source=web';
     var youdaoUrl='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':'');
     /* 中文→百度翻译优先，英文→有道优先 */
