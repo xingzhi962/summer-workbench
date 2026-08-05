@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>TTS Test v4</title>
+<style>body{font-family:sans-serif;padding:20px;}button{margin:6px;padding:8px 12px;font-size:14px;cursor:pointer;}.log{margin-top:20px;white-space:pre-wrap;font-family:monospace;background:#f5f5f5;padding:12px;font-size:12px;max-height:60vh;overflow:auto;}</style>
+</head><body>
+<h2>TTS 测试 v4 - speechSynthesis 深度测试</h2>
+
+<h3>1. 先加载voices</h3>
+<button onclick="loadAndShowVoices()">加载并显示所有Voices</button>
+
+<h3>2. 等待voices后测试原生中文</h3>
+<button onclick="testNativeWait('你好世界','zh-CN')">原生中文(等待voice)</button>
+<button onclick="testNativeWait('hello world','en-US')">原生英文(等待voice)</button>
+
+<h3>3. 直接调用（不等voice）</h3>
+<button onclick="testNativeDirect('你好世界','zh-CN')">原生中文(直接)</button>
+
+<h3>4. 有道英文 audio标签（确认能用）</h3>
+<button onclick="testAudio('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent('hello world')+'&type=2&le=eng')">有道英文</button>
+
+<h3>5. 组合测试：原生优先+有道英文降级</h3>
+<button onclick="testCombo('你好世界','zh-CN')">组合: 中文</button>
+<button onclick="testCombo('hello world','en-US')">组合: 英文</button>
+
+<div class="log" id="log">等待测试...</div>
+
+<script>
+function log(msg){
+  var el=document.getElementById('log');
+  el.textContent+=msg+'\n';
+  el.scrollTop=el.scrollHeight;
+}
+
+/* 加载并显示所有可用voices */
+function loadAndShowVoices(){
+  log('--- 加载Voices ---');
+  if(!window.speechSynthesis){log('speechSynthesis不可用');return;}
+  
+  var voices=speechSynthesis.getVoices();
+  log('当前已加载: '+voices.length+' voices');
+  
+  // 按语言分组显示
+  var zh=voices.filter(function(v){return v.lang&&v.lang.indexOf('zh')===0;});
+  var en=voices.filter(function(v){return v.lang&&v.lang.indexOf('en')===0;});
+  var other=voices.length-zh.length-en.length;
+  
+  log('中文voices('+zh.length+'): '+zh.map(function(v){return v.name.substring(0,20)+'('+v.lang+')';}).join(', ')||'无');
+  log('英文voices('+en.length+'): '+en.map(function(v){return v.name.substring(0,20)+'('+v.lang+')';}).join(', ')||'无');
+  log('其他: '+other+'个');
+  
+  if(voices.length===0){
+    log('voices为空，等待onvoiceschanged...');
+    speechSynthesis.onvoiceschanged=function(){
+      var v2=speechSynthesis.getVoices();
+      log('onvoiceschanged触发! 现在有'+v2.length+'个voices');
+      var zh2=v2.filter(function(v){return v.lang&&v.lang.indexOf('zh')===0;});
+      log('中文: '+zh2.map(function(v){return v.name.substring(0,20)+'('+v.lang+')';}).join(', ')||'无');
+    };
+    // 也设置超时
+    setTimeout(function(){
+      var v3=speechSynthesis.getVoices();
+      log('1秒后再次检查: '+v3.length+' voices');
+    },1000);
+    setTimeout(function(){
+      var v4=speechSynthesis.getVoices();
+      log('3秒后再次检查: '+v4.length+' voices');
+    },3000);
+  }
+}
+
+/* 等待voices加载再播放 */
+function testNativeWait(text,lang){
+  log('--- 原生(等待) '+lang+' ---');
+  if(!window.speechSynthesis||!window.SpeechSynthesisUtterance){log('不可用');return;}
+  
+  function trySpeak(){
+    var voices=speechSynthesis.getVoices();
+    log('尝试播放, voices='+voices.length+', lang='+lang);
+    
+    speechSynthesis.cancel();
+    if(speechSynthesis.suspended)speechSynthesis.resume();
+    
+    var u=new SpeechSynthesisUtterance(text);
+    u.lang=lang;u.rate=0.8;u.volume=1;u.pitch=1;
+    
+    // 尝试选voice
+    if(voices.length>0){
+      var match=voices.find(function(v){return v.lang===lang;})||
+                voices.find(function(v){return v.lang&&v.lang.indexOf(lang==='en-US'?'en':'zh')===0;});
+      if(match){
+        u.voice=match;
+        log('选中voice: '+match.name+'('+match.lang+')');
+      }else{
+        log('无匹配voice, 使用默认');
+      }
+    }
+    
+    u.onstart=function(){log('['+lang+'] 原生: start!');};
+    u.onend=function(){log('['+lang+'] 原生: end');};
+    u.onerror=function(e){log('['+lang+'] 原生: error='+e.error+', type='+e.type);};
+    
+    // 安卓micro-delay
+    setTimeout(function(){
+      speechSynthesis.speak(u);
+      // 安卓resume fix
+      setTimeout(function(){if(speechSynthesis.suspended)speechSynthesis.resume();},100);
+      setTimeout(function(){if(speechSynthesis.suspended)speechSynthesis.resume();},500);
+    },50);
+  }
+  
+  trySpeak();
+  
+  // 如果voice还没加载，等一下再试
+  if(speechSynthesis.getVoices().length===0){
+    log('voices还没加载，500ms后再试...');
+    setTimeout(trySpeak,500);
+    setTimeout(trySpeak,2000);
+  }
+}
+
+/* 直接调用（不等） */
+function testNativeDirect(text,lang){
+  log('--- 原生(直接) '+lang+' ---');
+  if(!window.speechSynthesis){log('不可用');return;}
+  speechSynthesis.cancel();
+  if(speechSynthesis.suspended)speechSynthesis.resume();
+  var u=new SpeechSynthesisUtterance(text);
+  u.lang=lang;u.rate=0.8;
+  u.onstart=function(){log('['+lang+'] start');};
+  u.onend=function(){log('['+lang+'] end');};
+  u.onerror=function(e){log('['+lang+'] error: '+e.error);};
+  speechSynthesis.speak(u);
+}
+
+/* audio标签播放 */
+function testAudio(url){
+  log('--- audio标签 ---');
+  var a=document.createElement('audio');
+  a.setAttribute('playsinline','');
+  a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;';
+  a.src=url;
+  document.body.appendChild(a);
+  a.addEventListener('playing',function(){log('audio: playing!');});
+  a.addEventListener('ended',function(){log('audio: ended');a.remove();});
+  a.addEventListener('error',function(){log('audio: ERROR code='+a.error.code);a.remove();});
+  a.play().then(function(){log('audio: play() OK');}).catch(function(e){log('audio: fail '+e.message.substring(0,50));a.remove();});
+}
+
+/* 组合方案：原生优先，英文降级到有道 */
+function testCombo(text,lang){
+  log('--- 组合方案 '+lang+' ---');
+  var isEn=(lang==='en-US'||lang==='en');
+  var nativeWorked=false;
+  
+  // 尝试原生
+  if(window.speechSynthesis&&window.SpeechSynthesisUtterance){
+    var voices=speechSynthesis.getVoices();
+    var hasVoice=voices.some(function(v){return v.lang&&v.lang.indexOf(isEn?'en':'zh')===0;});
+    log('组合: voices='+voices.length+', hasVoice='+hasVoice);
+    
+    speechSynthesis.cancel();
+    if(speechSynthesis.suspended)speechSynthesis.resume();
+    var u=new SpeechSynthesisUtterance(text);
+    u.lang=lang;u.rate=0.8;
+    
+    if(voices.length>0){
+      var v=voices.find(function(x){return x.lang&&x.lang.indexOf(isEn?'en':'zh')===0;});
+      if(v){u.voice=v;log('组合: 使用voice '+v.name);}
+    }
+    
+    u.onstart=function(){nativeWorked=true;log('组合: 原生播放成功!');};
+    u.onend=function(){log('组合: 原生结束');};
+    u.onerror=function(e){
+      log('组合: 原生失败('+e.error+')，尝试在线TTS...');
+      if(isEn){
+        testAudio('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type=2&le=eng');
+      }
+    };
+    
+    setTimeout(function(){
+      speechSynthesis.speak(u);
+      setTimeout(function(){if(speechSynthesis.suspended)speechSynthesis.resume();},100);
+    },50);
+    
+    // 超时检测：1秒后如果原生没成功，降级
+    setTimeout(function(){
+      if(!nativeWorked){
+        log('组合: 原生1秒内未播放，降级到在线TTS');
+        if(isEn){
+          testAudio('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type=2&le=eng');
+        }
+        // 中文在线TTS在手机HTTP下都不可用，这里只做记录
+      }
+    },1500);
+  }else{
+    log('组合: 原生不可用，降级在线');
+  }
+}
+
+// 预加载voices
+if(window.speechSynthesis){
+  speechSynthesis.getVoices();
+  speechSynthesis.onvoiceschanged=function(){speechSynthesis.getVoices();};
+}
+</script>
+</body></html>
