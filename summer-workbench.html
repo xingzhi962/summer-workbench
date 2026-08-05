@@ -780,27 +780,34 @@ function createSpeakBtn(text,lang){
   return btn;
 }
 
-/* 每次播放创建全新audio，带超时检测（解决小米浏览器静默失败问题） */
+/* 先fetch下载音频为Blob，再从本地Blob URL播放（绕过小米浏览器跨域audio限制） */
 function _playOnce(url,timeout){
-  timeout=timeout||3000;
+  timeout=timeout||5000;
   return new Promise(function(resolve,reject){
-    var a=document.createElement('audio');
-    a.setAttribute('playsinline','');
-    a.setAttribute('webkit-playsinline','');
-    a.setAttribute('x5-playsinline','');
-    a.setAttribute('x5-video-player-type','h5');
-    a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
-    a.src=url;
     var settled=false;
-    var timer=setTimeout(function(){
-      if(!settled){settled=true;a.pause();a.remove();reject(new Error('timeout'));} 
-    },timeout);
-    a.addEventListener('playing',function(){clearTimeout(timer);});
-    a.addEventListener('canplay',function(){clearTimeout(timer);});
-    a.addEventListener('ended',function(){if(!settled){settled=true;a.remove();resolve();}});
-    a.addEventListener('error',function(){if(!settled){settled=true;a.remove();reject(new Error('audio error'));}});
-    document.body.appendChild(a);
-    a.play().catch(function(e){if(!settled){settled=true;clearTimeout(timer);a.remove();reject(e);}});
+    var timer;
+    function fail(msg){if(!settled){settled=true;clearTimeout(timer);reject(new Error(msg));}}
+    /* 用fetch把跨域音频先下载到本地Blob */
+    fetch(url,{mode:'cors',referrerPolicy:'no-referrer'}).then(function(r){
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      return r.blob();
+    }).then(function(blob){
+      var blobUrl=URL.createObjectURL(blob);
+      var a=document.createElement('audio');
+      a.setAttribute('playsinline','');
+      a.setAttribute('webkit-playsinline','');
+      a.setAttribute('x5-playsinline','');
+      a.setAttribute('x5-video-player-type','h5');
+      a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+      a.src=blobUrl;
+      timer=setTimeout(function(){if(!settled){settled=true;a.pause();a.remove();URL.revokeObjectURL(blobUrl);reject(new Error('timeout'));}},timeout);
+      a.addEventListener('playing',function(){clearTimeout(timer);});
+      a.addEventListener('canplay',function(){clearTimeout(timer);});
+      a.addEventListener('ended',function(){if(!settled){settled=true;a.remove();URL.revokeObjectURL(blobUrl);resolve();}});
+      a.addEventListener('error',function(){if(!settled){settled=true;clearTimeout(timer);a.remove();URL.revokeObjectURL(blobUrl);reject(new Error('audio error'));}});
+      document.body.appendChild(a);
+      a.play().catch(function(e){fail(e.message);});
+    }).catch(function(e){fail('fetch: '+e.message);});
   });
 }
 
@@ -815,18 +822,21 @@ function speak(text,lang){
   var isEn=(lang==='en-US'||lang==='en');
 
   if(_isMobile){
-    /* 英文→有道首选，中文→百度翻译首选，各带超时降级 */
-    var baiduFanyiUrl='https://fanyi.baidu.com/gettts?lan='+(isEn?'en':'zh')+'&text='+encodeURIComponent(text)+'&spd=3&source=web';
-    var youdaoUrl='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':'');
-    /* 中文：百度翻译首选 → 有道降级；英文：有道首选 → 百度翻译降级 */
-    var url1=isEn?youdaoUrl:baiduFanyiUrl;
-    var url2=isEn?baiduFanyiUrl:youdaoUrl;
-
-    _playOnce(url1).catch(function(){
-      _playOnce(url2).catch(function(){
-        tryNative(text,lang);
-      });
-    });
+    /* 多源TTS，中文：百度翻译→搜狗翻译→有道；英文：有道→百度翻译 */
+    var urls=[];
+    if(isEn){
+      urls.push('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type=2&le=eng');
+      urls.push('https://fanyi.baidu.com/gettts?lan=en&text='+encodeURIComponent(text)+'&spd=3&source=web');
+    }else{
+      urls.push('https://fanyi.baidu.com/gettts?lan=zh&text='+encodeURIComponent(text)+'&spd=3&source=web');
+      urls.push('https://fanyi.sogou.com/reventondc/synthesis?text='+encodeURIComponent(text)+'&speed=1&lang=zh-CHS&from=translateweb&speaker=6');
+      urls.push('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type=1');
+    }
+    function tryNext(i){
+      if(i>=urls.length){tryNative(text,lang);return;}
+      _playOnce(urls[i]).catch(function(){tryNext(i+1);});
+    }
+    tryNext(0);
     return;
   }
   /* 电脑端：优先原生 */
