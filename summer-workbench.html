@@ -780,9 +780,8 @@ function createSpeakBtn(text,lang){
   return btn;
 }
 
-/* 每次播放创建全新audio，带超时+currentTime检测（解决小米浏览器静默失败） */
-function _playOnce(url,timeout){
-  timeout=timeout||4000;
+/* 每次播放创建全新audio */
+function _playOnce(url){
   return new Promise(function(resolve,reject){
     var a=document.createElement('audio');
     a.setAttribute('playsinline','');
@@ -791,19 +790,10 @@ function _playOnce(url,timeout){
     a.setAttribute('x5-video-player-type','h5');
     a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
     a.src=url;
-    var settled=false;
-    var timer;
-    function done(ok){if(!settled){settled=true;clearTimeout(timer);if(ok){resolve();}else{a.pause();a.remove();reject(new Error('fail'));}}}
-    /* 超时：如果4秒内没有真正开始播放，判定失败 */
-    timer=setTimeout(function(){
-      /* 二次确认：如果currentTime在前进说明在播放，不中断 */
-      if(a.currentTime>0.1){return;}
-      done(false);
-    },timeout);
-    a.addEventListener('ended',function(){done(true);});
-    a.addEventListener('error',function(){done(false);});
+    a.addEventListener('ended',function(){a.remove();resolve();});
+    a.addEventListener('error',function(){a.remove();reject(new Error('audio error'));});
     document.body.appendChild(a);
-    a.play().catch(function(){done(false);});
+    a.play().then(resolve).catch(function(e){a.remove();reject(e);});
   });
 }
 
@@ -818,21 +808,17 @@ function speak(text,lang){
   var isEn=(lang==='en-US'||lang==='en');
 
   if(_isMobile){
-    /* 中文3源降级：百度翻译→搜狗翻译→有道；英文2源：有道→百度翻译 */
-    var urls=[];
-    if(isEn){
-      urls.push('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type=2&le=eng');
-      urls.push('https://fanyi.baidu.com/gettts?lan=en&text='+encodeURIComponent(text)+'&spd=3&source=web');
-    }else{
-      urls.push('https://fanyi.baidu.com/gettts?lan=zh&text='+encodeURIComponent(text)+'&spd=3&source=web');
-      urls.push('https://fanyi.sogou.com/reventondc/synthesis?text='+encodeURIComponent(text)+'&speed=1&lang=zh-CHS&from=translateweb&speaker=6');
-      urls.push('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type=1');
-    }
-    function tryNext(i){
-      if(i>=urls.length){tryNative(text,lang);return;}
-      _playOnce(urls[i]).catch(function(){tryNext(i+1);});
-    }
-    tryNext(0);
+    var baiduFanyiUrl='https://fanyi.baidu.com/gettts?lan='+(isEn?'en':'zh')+'&text='+encodeURIComponent(text)+'&spd=3&source=web';
+    var youdaoUrl='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':'');
+    /* 中文→百度翻译优先，英文→有道优先 */
+    var url1=isEn?youdaoUrl:baiduFanyiUrl;
+    var url2=isEn?baiduFanyiUrl:youdaoUrl;
+
+    _playOnce(url1).catch(function(){
+      _playOnce(url2).catch(function(){
+        tryNative(text,lang);
+      });
+    });
     return;
   }
   /* 电脑端：优先原生 */
