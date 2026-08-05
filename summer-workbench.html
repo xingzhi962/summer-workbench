@@ -759,69 +759,85 @@ function updateCloudUI(){
 function $(id){return document.getElementById(id);}
 function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a;}
 function shuffle(arr){var a=arr.slice();for(var i=a.length-1;i>0;i--){var j=rnd(0,i);var t=a[i];a[i]=a[j];a[j]=t;}return a;}
-/* 语音朗读 - 安卓/移动端兼容版（自动降级在线TTS） */
-var _ttsAudio=null; /* 在线TTS播放器 */
-var _speechVoices=[];
-var _nativeTTSTested=false;
-var _nativeTTSWorks=false;
-/* 检测浏览器原生speechSynthesis是否真正可用（安卓很多浏览器有API但不发声） */
-function _testNativeTTS(){
-  if(!window.speechSynthesis||!SpeechSynthesisUtterance){_nativeTTSWorks=false;_nativeTTSTested=true;return;}
-  var v=speechSynthesis.getVoices();
-  if(v&&v.length>0){_speechVoices=v;}
-  var hasChinese=v&&v.some(function(x){return x.lang&&x.lang.indexOf('zh')===0;});
-  if(!hasChinese&&v.length<=1){_nativeTTSWorks=false;_nativeTTSTested=true;return;}
-  _nativeTTSWorks=true;_nativeTTSTested=true;
-}
-function _loadVoices(){
-  if(!window.speechSynthesis)return;
-  var v=speechSynthesis.getVoices();
-  if(v&&v.length>0){_speechVoices=v;_testNativeTTS();}
-}
-if(window.speechSynthesis){
-  _loadVoices();
-  speechSynthesis.onvoiceschanged=function(){_loadVoices();};
-  setTimeout(function(){if(!_nativeTTSTested)_testNativeTTS();},1000);
-}
-/* 在线TTS降级：使用有道词典免费接口（无需Key） */
-function _speakOnline(text,lang){
-  if(!_ttsAudio){_ttsAudio=new Audio();}
-  _ttsAudio.pause();
-  var isEn=(lang==='en-US'||lang==='en');
-  var url='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':'');
-  _ttsAudio.src=url;
-  _ttsAudio.play().catch(function(){});
-}
-function speak(text,lang){
-  if(!text)return;
-  if(!lang)lang=(text.match(/[\u4e00-\u9fff]/)?'zh-CN':'en-US');
-  if(!_nativeTTSTested)_testNativeTTS();
-  if(!_nativeTTSWorks){_speakOnline(text,lang);return;}
-  if(!window.speechSynthesis){_speakOnline(text,lang);return;}
-  if(speechSynthesis.suspended)speechSynthesis.resume();
-  speechSynthesis.cancel();
-  var u=new SpeechSynthesisUtterance(text);
-  u.lang=lang||'zh-CN';u.rate=0.8;u.volume=1;u.pitch=1;
-  if(_speechVoices.length>0){
-    var v=_speechVoices.find(function(x){return x.lang&&x.lang.indexOf(lang==='en-US'?'en':'zh')===0;});
-    if(v)u.voice=v;
-  }
-  setTimeout(function(){
-    speechSynthesis.speak(u);
-    setTimeout(function(){if(speechSynthesis.suspended)speechSynthesis.resume();},100);
-  },50);
-}
-/* 创建语音按钮的工厂函数（兼容旧调用） */
+/* 语音朗读 - 移动端兼容版 v8 */
+var _isMobile=/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+var _isFile=(location.protocol==='file:');
+
+/* 创建语音按钮的工厂函数 */
 function createSpeakBtn(text,lang){
   var btn=document.createElement('button');
   btn.className='speak-btn';
   btn.textContent='🔊';
   (function(t,l){
     btn.addEventListener('click',function(){
-      speak(t,l||'zh-CN');
+      if(_isFile){
+        alert('当前从微信直接打开文件，浏览器安全策略禁止加载在线音频。\n请用Chrome浏览器打开，或通过HTTP服务访问。\n\n操作：长按文件 → 用其他应用打开 → 选Chrome');
+        return;
+      }
+      speak(t,l);
     });
   })(text,lang||'zh-CN');
   return btn;
+}
+
+/* 每次播放创建全新audio */
+function _playOnce(url){
+  return new Promise(function(resolve,reject){
+    var a=document.createElement('audio');
+    a.setAttribute('playsinline','');
+    a.setAttribute('webkit-playsinline','');
+    a.setAttribute('x5-playsinline','');
+    a.setAttribute('x5-video-player-type','h5');
+    a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+    a.src=url;
+    a.addEventListener('ended',function(){a.remove();resolve();});
+    a.addEventListener('error',function(){a.remove();reject(new Error('audio error'));});
+    document.body.appendChild(a);
+    a.play().then(resolve).catch(function(e){a.remove();reject(e);});
+  });
+}
+
+/* 统一入口 */
+function speak(text,lang){
+  if(!text)return;
+  if(_isFile){
+    alert('语音不可用：请用Chrome浏览器打开此文件，或通过HTTP服务访问。');
+    return;
+  }
+  if(!lang)lang=(text.match(/[\u4e00-\u9fff]/)?'zh-CN':'en-US');
+  var isEn=(lang==='en-US'||lang==='en');
+
+  if(_isMobile){
+    /* 百度翻译TTS(中文) + 有道词典TTS(英文) */
+    var baiduFanyiUrl='https://fanyi.baidu.com/gettts?lan='+(isEn?'en':'zh')+'&text='+encodeURIComponent(text)+'&spd=3&source=web';
+    var youdaoUrl='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':'');
+    /* 中文→百度翻译优先，英文→有道优先 */
+    var url1=isEn?youdaoUrl:baiduFanyiUrl;
+    var url2=isEn?baiduFanyiUrl:youdaoUrl;
+
+    _playOnce(url1).catch(function(){
+      _playOnce(url2).catch(function(){
+        tryNative(text,lang);
+      });
+    });
+    return;
+  }
+  /* 电脑端：优先原生 */
+  if(!tryNative(text,lang)){
+    _playOnce('https://fanyi.baidu.com/gettts?lan=zh&text='+encodeURIComponent(text)+'&spd=3&source=web');
+  }
+}
+
+function tryNative(text,lang){
+  if(!window.speechSynthesis||!window.SpeechSynthesisUtterance)return false;
+  try{
+    if(speechSynthesis.suspended)speechSynthesis.resume();
+    speechSynthesis.cancel();
+    var u=new SpeechSynthesisUtterance(text);
+    u.lang=lang||'zh-CN';u.rate=0.8;u.volume=1;u.pitch=1;
+    speechSynthesis.speak(u);
+    return true;
+  }catch(e){return false;}
 }
 var _seed=0;
 function seedRandom(s){_seed=s;}
