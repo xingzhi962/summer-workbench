@@ -808,12 +808,13 @@ function speak(text,lang){
   var isEn=(lang==='en-US'||lang==='en');
 
   if(_isMobile){
-    /* 百度翻译TTS(中文) + 有道词典TTS(英文) */
-    var baiduFanyiUrl='https://fanyi.baidu.com/gettts?lan='+(isEn?'en':'zh')+'&text='+encodeURIComponent(text)+'&spd=3&source=web';
+    /* 有道词典TTS（中文+英文都可用，小米浏览器兼容性最好） */
     var youdaoUrl='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':'');
-    /* 中文→百度翻译优先，英文→有道优先 */
-    var url1=isEn?youdaoUrl:baiduFanyiUrl;
-    var url2=isEn?baiduFanyiUrl:youdaoUrl;
+    /* 百度翻译TTS作为降级备选 */
+    var baiduFanyiUrl='https://fanyi.baidu.com/gettts?lan='+(isEn?'en':'zh')+'&text='+encodeURIComponent(text)+'&spd=3&source=web';
+    /* 统一优先有道词典（中文英文均首选有道），百度翻译降级 */
+    var url1=youdaoUrl;
+    var url2=baiduFanyiUrl;
 
     _playOnce(url1).catch(function(){
       _playOnce(url2).catch(function(){
@@ -824,7 +825,7 @@ function speak(text,lang){
   }
   /* 电脑端：优先原生 */
   if(!tryNative(text,lang)){
-    _playOnce('https://fanyi.baidu.com/gettts?lan=zh&text='+encodeURIComponent(text)+'&spd=3&source=web');
+    _playOnce('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':''));
   }
 }
 
