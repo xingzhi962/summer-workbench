@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>TTS Test v5</title>
+<style>body{font-family:sans-serif;padding:20px;}button{margin:6px;padding:8px 12px;font-size:14px;cursor:pointer;}.log{margin-top:20px;white-space:pre-wrap;font-family:monospace;background:#f5f5f5;padding:12px;font-size:12px;max-height:60vh;overflow:auto;}</style>
+</head><body>
+<h2>TTS 测试 v5 - 有道词典 + le=zh</h2>
+
+<h3>中文 - 有道词典(加le=zh参数)</h3>
+<button onclick="testAudio('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent('你好')+'&type=1&le=zh')">有道中文 你好 (le=zh)</button>
+<button onclick="testAudio('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent('大')+'&type=1&le=zh')">有道中文 大 (le=zh)</button>
+<button onclick="testAudio('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent('春眠不觉晓')+'&type=1&le=zh')">有道中文 春眠不觉晓 (le=zh)</button>
+
+<h3>中文 - 有道词典(旧参数，无le，对照组)</h3>
+<button onclick="testAudio('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent('你好')+'&type=1')">有道中文 你好 (无le)</button>
+
+<h3>英文 - 有道词典(确认能用)</h3>
+<button onclick="testAudio('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent('hello')+'&type=2&le=eng')">有道英文 hello</button>
+
+<div class="log" id="log">等待测试...</div>
+
+<script>
+function log(msg){
+  var el=document.getElementById('log');
+  el.textContent+=msg+'\n';
+  el.scrollTop=el.scrollHeight;
+}
+
+function testAudio(url){
+  log('--- test ---');
+  log('URL: '+url.substring(0,80)+'...');
+  var a=document.createElement('audio');
+  a.setAttribute('playsinline','');
+  a.setAttribute('webkit-playsinline','');
+  a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;';
+  a.src=url;
+  document.body.appendChild(a);
+  a.addEventListener('loadeddata',function(){log('loadeddata, duration='+a.duration);});
+  a.addEventListener('canplay',function(){log('canplay, duration='+a.duration);});
+  a.addEventListener('playing',function(){log('playing! 有声音了!');});
+  a.addEventListener('ended',function(){log('ended');a.remove();});
+  a.addEventListener('error',function(){log('ERROR: code='+a.error.code);a.remove();});
+  a.addEventListener('stalled',function(){log('stalled');});
+  a.play().then(function(){log('play() OK');}).catch(function(e){log('play() fail: '+e.message.substring(0,60));a.remove();});
+  setTimeout(function(){if(a.parentNode)log('8s timeout: paused='+a.paused+', readyState='+a.readyState);},8000);
+}
+</script>
+</body></html>
