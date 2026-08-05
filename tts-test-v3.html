@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>TTS Test v3</title>
+<style>body{font-family:sans-serif;padding:20px;}button{margin:6px;padding:8px 12px;font-size:14px;cursor:pointer;}.log{margin-top:20px;white-space:pre-wrap;font-family:monospace;background:#f5f5f5;padding:12px;font-size:12px;max-height:60vh;overflow:auto;}</style>
+</head><body>
+<h2>TTS 跨域测试 v3</h2>
+
+<h3>中文 - AudioContext方案</h3>
+<button onclick="testAC('ac_cors_baidu_zh','https://cors.sh/https://fanyi.baidu.com/gettts?lan=zh&text='+encodeURIComponent('你好世界')+'&spd=3&source=web')">AC: CORS代理百度中文</button>
+<button onclick="testAC('ac_direct_baidu_zh','https://fanyi.baidu.com/gettts?lan=zh&text='+encodeURIComponent('你好世界')+'&spd=3&source=web')">AC: 百度中文直连</button>
+
+<h3>中文 - Audio标签方案(对比)</h3>
+<button onclick="testTTS('audio_cors_zh','https://cors.sh/https://fanyi.baidu.com/gettts?lan=zh&text='+encodeURIComponent('你好世界')+'&spd=3&source=web')">Audio: CORS代理百度中文</button>
+<button onclick="testTTS('audio_baidu_zh','https://fanyi.baidu.com/gettts?lan=zh&text='+encodeURIComponent('你好世界')+'&spd=3&source=web')">Audio: 百度中文直连</button>
+
+<h3>英文 - 对比</h3>
+<button onclick="testAC('ac_youdao_en','https://dict.youdao.com/dictvoice?audio='+encodeURIComponent('hello world')+'&type=2&le=eng')">AC: 有道英文</button>
+<button onclick="testTTS('audio_youdao_en','https://dict.youdao.com/dictvoice?audio='+encodeURIComponent('hello world')+'&type=2&le=eng')">Audio: 有道英文</button>
+
+<h3>原生语音</h3>
+<button onclick="testNative()">原生 speechSynthesis</button>
+
+<div class="log" id="log">等待测试...</div>
+
+<script>
+function log(msg){
+  var el=document.getElementById('log');
+  el.textContent+=msg+'\n';
+  el.scrollTop=el.scrollHeight;
+}
+
+/* AudioContext方案：fetch获取+解码+播放 */
+function testAC(name,url){
+  log('--- '+name+' ---');
+  log('URL: '+url.substring(0,70)+'...');
+  
+  fetch(url).then(function(resp){
+    log('['+name+'] fetch status: '+resp.status);
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    return resp.arrayBuffer();
+  }).then(function(buf){
+    log('['+name+'] arrayBuffer: '+buf.byteLength+' bytes');
+    var ctx=new(window.AudioContext||window.webkitAudioContext)();
+    log('['+name+'] AudioContext state: '+ctx.state);
+    return ctx.decodeAudioData(buf,function(audioBuffer){
+      log('['+name+'] decodeAudioData OK! duration='+audioBuffer.duration+'s, channels='+audioBuffer.numberOfChannels+', sampleRate='+audioBuffer.sampleRate);
+      var source=ctx.createBufferSource();
+      source.buffer=audioBuffer;
+      source.connect(ctx.destination);
+      source.onended=function(){log('['+name+'] playback ended!');ctx.close();};
+      source.start(0);
+      log('['+name+'] started playback!');
+    },function(e){
+      log('['+name+'] decodeAudioData ERROR: '+e);
+      ctx.close();
+    });
+  }).catch(function(e){
+    log('['+name+'] fetch ERROR: '+e.message);
+  });
+}
+
+/* Audio标签方案(对比) */
+function testTTS(name,url){
+  log('--- '+name+' ---');
+  var a=document.createElement('audio');
+  a.setAttribute('playsinline','');
+  a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;';
+  a.src=url;
+  document.body.appendChild(a);
+  a.addEventListener('playing',function(){log('['+name+'] playing!');});
+  a.addEventListener('ended',function(){log('['+name+'] ended');a.remove();});
+  a.addEventListener('error',function(){log('['+name+'] ERROR: code='+a.error.code);a.remove();});
+  a.play().then(function(){log('['+name+'] play() OK');}).catch(function(e){log('['+name+'] play() fail: '+e.message.substring(0,50));a.remove();});
+  setTimeout(function(){if(a.parentNode)log('['+name+'] 8s timeout: paused='+a.paused+', readyState='+a.readyState);},8000);
+}
+
+function testNative(){
+  log('--- 原生 speechSynthesis ---');
+  if(!window.speechSynthesis||!window.SpeechSynthesisUtterance){log('不可用');return;}
+  var voices=speechSynthesis.getVoices();
+  log('Voices: '+voices.length);
+  var zh=voices.filter(function(v){return v.lang&&v.lang.indexOf('zh')===0;});
+  log('中文: '+zh.map(function(v){return v.name+'('+v.lang+')';}).join(', ')||'无');
+  var u=new SpeechSynthesisUtterance('你好世界');
+  u.lang='zh-CN';u.rate=0.8;
+  u.onstart=function(){log('原生: start');};
+  u.onend=function(){log('原生: end');};
+  u.onerror=function(e){log('原生: error '+e.error);};
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+}
+
+if(window.speechSynthesis){
+  speechSynthesis.getVoices();
+  speechSynthesis.onvoiceschanged=function(){speechSynthesis.getVoices();};
+}
+</script>
+</body></html>
