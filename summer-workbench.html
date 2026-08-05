@@ -759,8 +759,9 @@ function updateCloudUI(){
 function $(id){return document.getElementById(id);}
 function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a;}
 function shuffle(arr){var a=arr.slice();for(var i=a.length-1;i>0;i--){var j=rnd(0,i);var t=a[i];a[i]=a[j];a[j]=t;}return a;}
-/* 语音朗读 - 移动端兼容版 v9（修复HTTP跨域中文无声） */
+/* 语音朗读 - v10（CORS代理修复在线中文无声） */
 var _isMobile=/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+var _isHTTP=(location.protocol==='http:'||location.protocol==='https:');
 
 /* 创建语音按钮的工厂函数 */
 function createSpeakBtn(text,lang){
@@ -786,10 +787,10 @@ function _playOnce(url,timeout){
     var done=false;
     var timer=setTimeout(function(){
       if(!done){done=true;a.remove();reject(new Error('timeout'));}
-    },timeout||5000);
+    },timeout||6000);
     a.addEventListener('ended',function(){if(!done){done=true;clearTimeout(timer);a.remove();resolve();}});
     a.addEventListener('error',function(){if(!done){done=true;clearTimeout(timer);a.remove();reject(new Error('audio error'));}});
-    a.addEventListener('playing',function(){if(!done){clearTimeout(timer);/* 播放成功不急着resolve，等ended */}});
+    a.addEventListener('playing',function(){if(!done){clearTimeout(timer);/* 播放成功，等ended */}});
     document.body.appendChild(a);
     a.play().catch(function(e){if(!done){done=true;clearTimeout(timer);a.remove();reject(e);}});
   });
@@ -802,24 +803,45 @@ function speak(text,lang){
   var isEn=(lang==='en-US'||lang==='en');
   var encoded=encodeURIComponent(text);
 
-  /* TTS URL列表：按优先级排列，依次尝试 */
-  var youdaoUrl='https://dict.youdao.com/dictvoice?audio='+encoded+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':'');
-  var baiduFanyiUrl='https://fanyi.baidu.com/gettts?lan='+(isEn?'en':'zh')+'&text='+encoded+'&spd=3&source=web';
+  if(_isMobile&&_isHTTP){
+    /* 在线移动端：需要CORS代理才能播放百度TTS */
+    if(isEn){
+      /* 英文：有道词典跨域可用，直接播放 */
+      _playOnce('https://dict.youdao.com/dictvoice?audio='+encoded+'&type=2&le=eng',6000).catch(function(){
+        /* 降级：代理百度英文 */
+        _playOnce('https://cors.sh/https://fanyi.baidu.com/gettts?lan=en&text='+encoded+'&spd=3&source=web',6000).catch(function(){});
+      });
+    }else{
+      /* 中文：百度翻译TTS通过CORS代理播放 */
+      _playOnce('https://cors.sh/https://fanyi.baidu.com/gettts?lan=zh&text='+encoded+'&spd=3&source=web',6000).catch(function(){
+        /* 降级：直接试百度（本地文件可能可用） */
+        _playOnce('https://fanyi.baidu.com/gettts?lan=zh&text='+encoded+'&spd=3&source=web',6000).catch(function(){
+          /* 降级：试有道中文（通常无效但试试） */
+          _playOnce('https://dict.youdao.com/dictvoice?audio='+encoded+'&type=1',6000).catch(function(){
+            tryNative(text,lang);
+          });
+        });
+      });
+    }
+    return;
+  }
 
-  if(_isMobile){
-    /* 移动端：有道词典优先（跨域友好），百度翻译降级，最后原生 */
-    _playOnce(youdaoUrl,5000).catch(function(){
-      _playOnce(baiduFanyiUrl,5000).catch(function(){
+  if(_isMobile&&!_isHTTP){
+    /* 本地文件打开的移动端：百度翻译TTS可直接播放 */
+    var baiduUrl='https://fanyi.baidu.com/gettts?lan='+(isEn?'en':'zh')+'&text='+encoded+'&spd=3&source=web';
+    var youdaoUrl='https://dict.youdao.com/dictvoice?audio='+encoded+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':'');
+    _playOnce(isEn?youdaoUrl:baiduUrl,6000).catch(function(){
+      _playOnce(isEn?baiduUrl:youdaoUrl,6000).catch(function(){
         tryNative(text,lang);
       });
     });
     return;
   }
+
   /* 电脑端：优先原生speechSynthesis */
   if(!tryNative(text,lang)){
-    /* 原生失败，在线TTS降级 */
-    _playOnce(youdaoUrl,5000).catch(function(){
-      _playOnce(baiduFanyiUrl,5000).catch(function(){});
+    _playOnce('https://dict.youdao.com/dictvoice?audio='+encoded+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':''),6000).catch(function(){
+      _playOnce('https://fanyi.baidu.com/gettts?lan='+(isEn?'en':'zh')+'&text='+encoded+'&spd=3&source=web',6000).catch(function(){});
     });
   }
 }
