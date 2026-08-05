@@ -780,34 +780,30 @@ function createSpeakBtn(text,lang){
   return btn;
 }
 
-/* 先fetch下载音频为Blob，再从本地Blob URL播放（绕过小米浏览器跨域audio限制） */
+/* 每次播放创建全新audio，带超时+currentTime检测（解决小米浏览器静默失败） */
 function _playOnce(url,timeout){
-  timeout=timeout||5000;
+  timeout=timeout||4000;
   return new Promise(function(resolve,reject){
+    var a=document.createElement('audio');
+    a.setAttribute('playsinline','');
+    a.setAttribute('webkit-playsinline','');
+    a.setAttribute('x5-playsinline','');
+    a.setAttribute('x5-video-player-type','h5');
+    a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+    a.src=url;
     var settled=false;
     var timer;
-    function fail(msg){if(!settled){settled=true;clearTimeout(timer);reject(new Error(msg));}}
-    /* 用fetch把跨域音频先下载到本地Blob */
-    fetch(url,{mode:'cors',referrerPolicy:'no-referrer'}).then(function(r){
-      if(!r.ok)throw new Error('HTTP '+r.status);
-      return r.blob();
-    }).then(function(blob){
-      var blobUrl=URL.createObjectURL(blob);
-      var a=document.createElement('audio');
-      a.setAttribute('playsinline','');
-      a.setAttribute('webkit-playsinline','');
-      a.setAttribute('x5-playsinline','');
-      a.setAttribute('x5-video-player-type','h5');
-      a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
-      a.src=blobUrl;
-      timer=setTimeout(function(){if(!settled){settled=true;a.pause();a.remove();URL.revokeObjectURL(blobUrl);reject(new Error('timeout'));}},timeout);
-      a.addEventListener('playing',function(){clearTimeout(timer);});
-      a.addEventListener('canplay',function(){clearTimeout(timer);});
-      a.addEventListener('ended',function(){if(!settled){settled=true;a.remove();URL.revokeObjectURL(blobUrl);resolve();}});
-      a.addEventListener('error',function(){if(!settled){settled=true;clearTimeout(timer);a.remove();URL.revokeObjectURL(blobUrl);reject(new Error('audio error'));}});
-      document.body.appendChild(a);
-      a.play().catch(function(e){fail(e.message);});
-    }).catch(function(e){fail('fetch: '+e.message);});
+    function done(ok){if(!settled){settled=true;clearTimeout(timer);if(ok){resolve();}else{a.pause();a.remove();reject(new Error('fail'));}}}
+    /* 超时：如果4秒内没有真正开始播放，判定失败 */
+    timer=setTimeout(function(){
+      /* 二次确认：如果currentTime在前进说明在播放，不中断 */
+      if(a.currentTime>0.1){return;}
+      done(false);
+    },timeout);
+    a.addEventListener('ended',function(){done(true);});
+    a.addEventListener('error',function(){done(false);});
+    document.body.appendChild(a);
+    a.play().catch(function(){done(false);});
   });
 }
 
@@ -822,7 +818,7 @@ function speak(text,lang){
   var isEn=(lang==='en-US'||lang==='en');
 
   if(_isMobile){
-    /* 多源TTS，中文：百度翻译→搜狗翻译→有道；英文：有道→百度翻译 */
+    /* 中文3源降级：百度翻译→搜狗翻译→有道；英文2源：有道→百度翻译 */
     var urls=[];
     if(isEn){
       urls.push('https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type=2&le=eng');
