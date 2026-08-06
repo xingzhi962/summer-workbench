@@ -759,10 +759,8 @@ function updateCloudUI(){
 function $(id){return document.getElementById(id);}
 function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a;}
 function shuffle(arr){var a=arr.slice();for(var i=a.length-1;i>0;i--){var j=rnd(0,i);var t=a[i];a[i]=a[j];a[j]=t;}return a;}
-/* 语音朗读 - v17（本地百度整句 / 在线fetch下载blob+audio播放） */
+/* 语音朗读 - v8恢复版（手机端百度TTS中文+有道英文，电脑端原生） */
 var _isMobile=/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-var _isFile=(location.protocol==='file:');
-var _speakVersion=0;
 
 /* 创建语音按钮的工厂函数 */
 function createSpeakBtn(text,lang){
@@ -775,131 +773,20 @@ function createSpeakBtn(text,lang){
   return btn;
 }
 
-/* 播放audio（无超时版，本地文件用） */
+/* 每次播放创建全新audio */
 function _playOnce(url){
   return new Promise(function(resolve,reject){
     var a=document.createElement('audio');
-    a.setAttribute('playsinline','');a.setAttribute('webkit-playsinline','');
-    a.setAttribute('x5-playsinline','');a.setAttribute('x5-video-player-type','h5');
+    a.setAttribute('playsinline','');
+    a.setAttribute('webkit-playsinline','');
+    a.setAttribute('x5-playsinline','');
+    a.setAttribute('x5-video-player-type','h5');
     a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
-    a.src=url;var done=false;
-    a.addEventListener('ended',function(){if(!done){done=true;a.remove();resolve();}});
-    a.addEventListener('error',function(){if(!done){done=true;a.remove();reject(new Error('audio error'));}});
+    a.src=url;
+    a.addEventListener('ended',function(){a.remove();resolve();});
+    a.addEventListener('error',function(){a.remove();reject(new Error('audio error'));});
     document.body.appendChild(a);
-    a.play().then(function(){done=true;resolve();}).catch(function(e){if(!done){done=true;a.remove();reject(e);}});
-  });
-}
-
-/* fetch下载音频为blob URL（在线链接专用，绕过audio标签的CORS限制） */
-function _fetchBlob(url){
-  return fetch(url,{mode:'cors',credentials:'omit'}).then(function(r){
-    if(!r.ok)throw new Error('http '+r.status);
-    return r.blob();
-  }).then(function(blob){
-    return URL.createObjectURL(blob);
-  });
-}
-
-/* 播放blob URL的audio */
-function _playBlobUrl(blobUrl){
-  return new Promise(function(resolve,reject){
-    var a=document.createElement('audio');
-    a.setAttribute('playsinline','');a.setAttribute('webkit-playsinline','');
-    a.setAttribute('x5-playsinline','');a.setAttribute('x5-video-player-type','h5');
-    a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
-    a.src=blobUrl;var done=false;
-    a.addEventListener('ended',function(){if(!done){done=true;URL.revokeObjectURL(blobUrl);a.remove();resolve();}});
-    a.addEventListener('error',function(){if(!done){done=true;URL.revokeObjectURL(blobUrl);a.remove();reject(new Error('audio error'));}});
-    document.body.appendChild(a);
-    a.play().then(function(){done=true;resolve();}).catch(function(e){if(!done){done=true;URL.revokeObjectURL(blobUrl);a.remove();reject(e);}});
-  });
-}
-
-/* 将中文文本拆成2-3字的组（保留标点停顿） */
-function _splitZhGroups(text){
-  var groups=[];var i=0;
-  while(i<text.length){
-    var ch=text[i];
-    if('，、；：'.indexOf(ch)>=0){groups.push({type:'pause',ms:250});i++;continue;}
-    if('。！？'.indexOf(ch)>=0){groups.push({type:'pause',ms:400});i++;continue;}
-    if(!ch.match(/[\u4e00-\u9fff]/)){i++;continue;}
-    var remain=text.length-i;
-    if(remain<=3){groups.push({type:'text',text:text.substring(i)});break;}
-    var len=3;if(remain===4)len=2;
-    groups.push({type:'text',text:text.substring(i,i+len)});i+=len;
-  }
-  return groups;
-}
-
-/* 预加载一个音频为blobURL（带重试） */
-function _preloadBlob(url,retries){
-  return _fetchBlob(url).catch(function(){
-    if(retries>0)return new Promise(function(resolve,reject){
-      setTimeout(function(){_preloadBlob(url,retries-1).then(resolve).catch(reject);},500);
-    });
-    return Promise.reject(new Error('preload failed'));
-  });
-}
-
-/* 在线中文朗读：预加载全部blob → 顺序播放 */
-function _speakOnline(text,ver){
-  var groups=_splitZhGroups(text);
-  if(groups.length===0){tryNative(text,'zh-CN');return;}
-  var loaded=[];var i=0;
-  function loadNext(){
-    if(i>=groups.length){
-      _playLoadedGroups(loaded,0,ver);
-      return;
-    }
-    var g=groups[i];
-    if(g.type==='pause'){loaded.push(g);i++;loadNext();return;}
-    var url='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(g.text)+'&type=1&le=zh';
-    _preloadBlob(url,2).then(function(blobUrl){
-      if(ver!==_speakVersion)return;
-      loaded.push({type:'audio',blobUrl:blobUrl});i++;loadNext();
-    }).catch(function(){
-      if(ver!==_speakVersion)return;
-      loaded.push({type:'skip',text:g.text});i++;loadNext();
-    });
-  }
-  loadNext();
-}
-
-/* 播放已加载的音频组 */
-function _playLoadedGroups(loaded,idx,ver){
-  if(ver!==_speakVersion)return;
-  if(idx>=loaded.length)return;
-  var g=loaded[idx];
-  if(g.type==='pause'){
-    setTimeout(function(){_playLoadedGroups(loaded,idx+1,ver);},g.ms);
-    return;
-  }
-  if(g.type==='skip'){
-    var chars=[];for(var k=0;k<g.text.length;k++)chars.push(g.text[k]);
-    _playFallbackChars(chars,0,ver,function(){_playLoadedGroups(loaded,idx+1,ver);});
-    return;
-  }
-  _playBlobUrl(g.blobUrl).then(function(){
-    setTimeout(function(){_playLoadedGroups(loaded,idx+1,ver);},80);
-  }).catch(function(){
-    setTimeout(function(){_playLoadedGroups(loaded,idx+1,ver);},80);
-  });
-}
-
-/* 逐字降级播放（在线链接用） */
-function _playFallbackChars(chars,idx,ver,onDone){
-  if(ver!==_speakVersion){if(onDone)onDone();return;}
-  if(idx>=chars.length){if(onDone)onDone();return;}
-  var url='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(chars[idx])+'&type=1&le=zh';
-  _preloadBlob(url,1).then(function(blobUrl){
-    if(ver!==_speakVersion){if(onDone)onDone();return;}
-    _playBlobUrl(blobUrl).then(function(){
-      setTimeout(function(){_playFallbackChars(chars,idx+1,ver,onDone);},100);
-    }).catch(function(){
-      setTimeout(function(){_playFallbackChars(chars,idx+1,ver,onDone);},100);
-    });
-  }).catch(function(){
-    setTimeout(function(){_playFallbackChars(chars,idx+1,ver,onDone);},100);
+    a.play().then(resolve).catch(function(e){a.remove();reject(e);});
   });
 }
 
@@ -908,32 +795,26 @@ function speak(text,lang){
   if(!text)return;
   if(!lang)lang=(text.match(/[\u4e00-\u9fff]/)?'zh-CN':'en-US');
   var isEn=(lang==='en-US'||lang==='en');
-  _speakVersion++;
 
-  /* 电脑端：优先原生speechSynthesis */
-  if(!_isMobile&&tryNative(text,lang))return;
+  if(_isMobile){
+    /* 百度翻译TTS(中文优先) + 有道词典TTS(英文优先) */
+    var baiduFanyiUrl='https://fanyi.baidu.com/gettts?lan='+(isEn?'en':'zh')+'&text='+encodeURIComponent(text)+'&spd=3&source=web';
+    var youdaoUrl='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':'&le=zh');
+    /* 中文：百度优先，英文：有道优先 */
+    var url1=isEn?youdaoUrl:baiduFanyiUrl;
+    var url2=isEn?baiduFanyiUrl:youdaoUrl;
 
-  if(isEn){
-    var url='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type=2&le=eng';
-    _playOnce(url).catch(function(){tryNative(text,lang);});
-    return;
-  }
-
-  /* === 中文 === */
-  if(_isFile){
-    /* 本地文件：百度TTS整句（v8策略，已确认可用） */
-    var baiduUrl='https://fanyi.baidu.com/gettts?lan=zh&text='+encodeURIComponent(text)+'&spd=3&source=web';
-    _playOnce(baiduUrl).catch(function(){
-      var youdaoUrl='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type=1&le=zh';
-      _playOnce(youdaoUrl).catch(function(){
+    _playOnce(url1).catch(function(){
+      _playOnce(url2).catch(function(){
         tryNative(text,lang);
       });
     });
     return;
   }
-
-  /* 在线链接：fetch下载为blob URL+audio播放 */
-  _speakOnline(text,_speakVersion);
+  /* 电脑端：先原生 */
+  if(!tryNative(text,lang)){
+    _playOnce('https://fanyi.baidu.com/gettts?lan=zh&text='+encodeURIComponent(text)+'&spd=3&source=web');
+  }
 }
 
 function tryNative(text,lang){
