@@ -759,7 +759,7 @@ function updateCloudUI(){
 function $(id){return document.getElementById(id);}
 function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a;}
 function shuffle(arr){var a=arr.slice();for(var i=a.length-1;i>0;i--){var j=rnd(0,i);var t=a[i];a[i]=a[j];a[j]=t;}return a;}
-/* 语音朗读 - v12（中文统一逐字朗读+延迟防限流+播放队列取消） */
+/* 语音朗读 - v13（中文2-3字分组朗读+重试机制+播放队列取消） */
 var _isMobile=/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
 var _speakVersion=0; /* 播放版本号，新播放自动取消旧的 */
 
@@ -796,39 +796,79 @@ function _playOnce(url,timeout){
   });
 }
 
-/* 将中文文本拆成逐字朗读（保留标点位置作为停顿） */
-function _splitZhChars(text){
-  var chars=[];
-  for(var i=0;i<text.length;i++){
-    var ch=text[i];
-    if(ch.match(/[\u4e00-\u9fff]/))chars.push(ch);
-    else if('，、；：'.indexOf(ch)>=0)chars.push('，'); /* 短停顿 */
-    else if('。！？'.indexOf(ch)>=0)chars.push('。');   /* 长停顿 */
-  }
-  return chars;
+/* 带重试的播放：失败后延迟重试，最多重试retries次 */
+function _playWithRetry(url,retries,delay,timeout){
+  return _playOnce(url,timeout).catch(function(){
+    if(retries>0){
+      return new Promise(function(resolve,reject){
+        setTimeout(function(){
+          _playWithRetry(url,retries-1,delay,timeout).then(resolve).catch(reject);
+        },delay);
+      });
+    }
+    return Promise.reject(new Error('all retries failed'));
+  });
 }
 
-/* 逐字朗读中文（v12核心：串行播放+延迟防限流+版本取消） */
-function _speakChars(chars,idx,ver,onDone){
+/* 将中文文本拆成2-3字的组（标点单独作为停顿标记） */
+function _splitZhGroups(text){
+  var groups=[];
+  var i=0;
+  while(i<text.length){
+    var ch=text[i];
+    /* 标点作为停顿标记 */
+    if('，、；：'.indexOf(ch)>=0){groups.push({type:'pause',ms:350});i++;continue;}
+    if('。！？'.indexOf(ch)>=0){groups.push({type:'pause',ms:600});i++;continue;}
+    /* 非汉字跳过 */
+    if(!ch.match(/[\u4e00-\u9fff]/)){i++;continue;}
+    /* 取2-3字为一组 */
+    var remain=text.length-i;
+    if(remain<=3){
+      groups.push({type:'text',text:text.substring(i)});break;
+    }
+    /* 3字一组，末尾剩余2字时合并 */
+    var len=3;
+    if(remain===4)len=2; /* 剩4字拆2+2而非3+1 */
+    groups.push({type:'text',text:text.substring(i,i+len)});
+    i+=len;
+  }
+  return groups;
+}
+
+/* 分组朗读中文（v13核心：2-3字一组+重试+延迟+版本取消） */
+function _speakGroups(groups,idx,ver,onDone){
   if(ver!==_speakVersion){if(onDone)onDone();return;} /* 被新播放取消 */
-  if(idx>=chars.length){if(onDone)onDone();return;}
-  var ch=chars[idx];
-  /* 标点停顿 */
-  if(ch==='，'){
-    setTimeout(function(){_speakChars(chars,idx+1,ver,onDone);},350);
+  if(idx>=groups.length){if(onDone)onDone();return;}
+  var g=groups[idx];
+  /* 停顿 */
+  if(g.type==='pause'){
+    setTimeout(function(){_speakGroups(groups,idx+1,ver,onDone);},g.ms);
     return;
   }
-  if(ch==='。'){
-    setTimeout(function(){_speakChars(chars,idx+1,ver,onDone);},600);
-    return;
-  }
-  var url='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(ch)+'&type=1&le=zh';
-  _playOnce(url,4000).then(function(){
-    /* 播放成功，延迟200ms再播下一个字（防限流） */
-    setTimeout(function(){_speakChars(chars,idx+1,ver,onDone);},200);
+  /* 2-3字分组播放 */
+  var url='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(g.text)+'&type=1&le=zh';
+  _playWithRetry(url,2,800,5000).then(function(){
+    /* 成功，延迟300ms播下一组 */
+    setTimeout(function(){_speakGroups(groups,idx+1,ver,onDone);},300);
   }).catch(function(){
-    /* 单字失败，延迟500ms后跳过继续（可能被限流，等久一点） */
-    setTimeout(function(){_speakChars(chars,idx+1,ver,onDone);},500);
+    /* 分组失败，降级逐字朗读这一组 */
+    var chars=[];for(var k=0;k<g.text.length;k++)chars.push(g.text[k]);
+    _speakFallbackChars(chars,0,ver,function(){
+      setTimeout(function(){_speakGroups(groups,idx+1,ver,onDone);},200);
+    });
+  });
+}
+
+/* 逐字降级朗读（分组失败时才用） */
+function _speakFallbackChars(chars,idx,ver,onDone){
+  if(ver!==_speakVersion){if(onDone)onDone();return;}
+  if(idx>=chars.length){if(onDone)onDone();return;}
+  var url='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(chars[idx])+'&type=1&le=zh';
+  _playWithRetry(url,2,1000,4000).then(function(){
+    setTimeout(function(){_speakFallbackChars(chars,idx+1,ver,onDone);},250);
+  }).catch(function(){
+    /* 单字重试也失败，跳过 */
+    setTimeout(function(){_speakFallbackChars(chars,idx+1,ver,onDone);},400);
   });
 }
 
@@ -844,12 +884,11 @@ function speak(text,lang){
   /* 电脑端：优先原生speechSynthesis */
   if(!_isMobile&&tryNative(text,lang))return;
 
-  /* 有道词典TTS：中文le=zh，英文le=eng */
   if(!isEn){
-    /* 中文统一走逐字朗读（v12：去掉短句尝试层，更可靠） */
-    var chars=_splitZhChars(text);
-    if(chars.length>0){
-      _speakChars(chars,0,_speakVersion);
+    /* 中文：2-3字分组朗读（v13） */
+    var groups=_splitZhGroups(text);
+    if(groups.length>0){
+      _speakGroups(groups,0,_speakVersion);
       return;
     }
   }
