@@ -759,7 +759,7 @@ function updateCloudUI(){
 function $(id){return document.getElementById(id);}
 function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a;}
 function shuffle(arr){var a=arr.slice();for(var i=a.length-1;i>0;i--){var j=rnd(0,i);var t=a[i];a[i]=a[j];a[j]=t;}return a;}
-/* 语音朗读 - v13（中文2-3字分组朗读+重试机制+播放队列取消） */
+/* 语音朗读 - v14（恢复v8策略：手机端百度TTS整句优先+有道拆分降级） */
 var _isMobile=/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
 var _speakVersion=0; /* 播放版本号，新播放自动取消旧的 */
 
@@ -774,8 +774,26 @@ function createSpeakBtn(text,lang){
   return btn;
 }
 
-/* 每次播放创建全新audio，带超时检测 */
-function _playOnce(url,timeout){
+/* 每次播放创建全新audio（v8简单版，无超时，更可靠） */
+function _playOnce(url){
+  return new Promise(function(resolve,reject){
+    var a=document.createElement('audio');
+    a.setAttribute('playsinline','');
+    a.setAttribute('webkit-playsinline','');
+    a.setAttribute('x5-playsinline','');
+    a.setAttribute('x5-video-player-type','h5');
+    a.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+    a.src=url;
+    var done=false;
+    a.addEventListener('ended',function(){if(!done){done=true;a.remove();resolve();}});
+    a.addEventListener('error',function(){if(!done){done=true;a.remove();reject(new Error('audio error'));}});
+    document.body.appendChild(a);
+    a.play().then(function(){done=true;resolve();}).catch(function(e){if(!done){done=true;a.remove();reject(e);}});
+  });
+}
+
+/* 带超时的播放（用于拆分降级场景） */
+function _playOnceWithTimeout(url,timeout){
   return new Promise(function(resolve,reject){
     var a=document.createElement('audio');
     a.setAttribute('playsinline','');
@@ -787,7 +805,7 @@ function _playOnce(url,timeout){
     var done=false;
     var timer=setTimeout(function(){
       if(!done){done=true;a.pause();a.src='';a.remove();reject(new Error('timeout'));}
-    },timeout||4000);
+    },timeout||5000);
     a.addEventListener('ended',function(){if(!done){done=true;clearTimeout(timer);a.remove();resolve();}});
     a.addEventListener('error',function(){if(!done){done=true;clearTimeout(timer);a.remove();reject(new Error('audio error'));}});
     a.addEventListener('playing',function(){if(!done){clearTimeout(timer);}});
@@ -796,62 +814,33 @@ function _playOnce(url,timeout){
   });
 }
 
-/* 带重试的播放：失败后延迟重试，最多重试retries次 */
-function _playWithRetry(url,retries,delay,timeout){
-  return _playOnce(url,timeout).catch(function(){
-    if(retries>0){
-      return new Promise(function(resolve,reject){
-        setTimeout(function(){
-          _playWithRetry(url,retries-1,delay,timeout).then(resolve).catch(reject);
-        },delay);
-      });
-    }
-    return Promise.reject(new Error('all retries failed'));
-  });
-}
-
 /* 将中文文本拆成2-3字的组（标点单独作为停顿标记） */
 function _splitZhGroups(text){
-  var groups=[];
-  var i=0;
+  var groups=[];var i=0;
   while(i<text.length){
     var ch=text[i];
-    /* 标点作为停顿标记 */
     if('，、；：'.indexOf(ch)>=0){groups.push({type:'pause',ms:350});i++;continue;}
     if('。！？'.indexOf(ch)>=0){groups.push({type:'pause',ms:600});i++;continue;}
-    /* 非汉字跳过 */
     if(!ch.match(/[\u4e00-\u9fff]/)){i++;continue;}
-    /* 取2-3字为一组 */
     var remain=text.length-i;
-    if(remain<=3){
-      groups.push({type:'text',text:text.substring(i)});break;
-    }
-    /* 3字一组，末尾剩余2字时合并 */
-    var len=3;
-    if(remain===4)len=2; /* 剩4字拆2+2而非3+1 */
-    groups.push({type:'text',text:text.substring(i,i+len)});
-    i+=len;
+    if(remain<=3){groups.push({type:'text',text:text.substring(i)});break;}
+    var len=3;if(remain===4)len=2;
+    groups.push({type:'text',text:text.substring(i,i+len)});i+=len;
   }
   return groups;
 }
 
-/* 分组朗读中文（v13核心：2-3字一组+重试+延迟+版本取消） */
+/* 有道拆分降级朗读（仅百度TTS整句失败时使用） */
 function _speakGroups(groups,idx,ver,onDone){
-  if(ver!==_speakVersion){if(onDone)onDone();return;} /* 被新播放取消 */
+  if(ver!==_speakVersion){if(onDone)onDone();return;}
   if(idx>=groups.length){if(onDone)onDone();return;}
   var g=groups[idx];
-  /* 停顿 */
-  if(g.type==='pause'){
-    setTimeout(function(){_speakGroups(groups,idx+1,ver,onDone);},g.ms);
-    return;
-  }
-  /* 2-3字分组播放 */
+  if(g.type==='pause'){setTimeout(function(){_speakGroups(groups,idx+1,ver,onDone);},g.ms);return;}
   var url='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(g.text)+'&type=1&le=zh';
-  _playWithRetry(url,2,800,5000).then(function(){
-    /* 成功，延迟300ms播下一组 */
+  _playOnceWithTimeout(url,5000).then(function(){
     setTimeout(function(){_speakGroups(groups,idx+1,ver,onDone);},300);
   }).catch(function(){
-    /* 分组失败，降级逐字朗读这一组 */
+    /* 分组失败，逐字降级 */
     var chars=[];for(var k=0;k<g.text.length;k++)chars.push(g.text[k]);
     _speakFallbackChars(chars,0,ver,function(){
       setTimeout(function(){_speakGroups(groups,idx+1,ver,onDone);},200);
@@ -859,15 +848,13 @@ function _speakGroups(groups,idx,ver,onDone){
   });
 }
 
-/* 逐字降级朗读（分组失败时才用） */
 function _speakFallbackChars(chars,idx,ver,onDone){
   if(ver!==_speakVersion){if(onDone)onDone();return;}
   if(idx>=chars.length){if(onDone)onDone();return;}
   var url='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(chars[idx])+'&type=1&le=zh';
-  _playWithRetry(url,2,1000,4000).then(function(){
+  _playOnceWithTimeout(url,4000).then(function(){
     setTimeout(function(){_speakFallbackChars(chars,idx+1,ver,onDone);},250);
   }).catch(function(){
-    /* 单字重试也失败，跳过 */
     setTimeout(function(){_speakFallbackChars(chars,idx+1,ver,onDone);},400);
   });
 }
@@ -884,19 +871,23 @@ function speak(text,lang){
   /* 电脑端：优先原生speechSynthesis */
   if(!_isMobile&&tryNative(text,lang))return;
 
-  if(!isEn){
-    /* 中文：2-3字分组朗读（v13） */
-    var groups=_splitZhGroups(text);
-    if(groups.length>0){
-      _speakGroups(groups,0,_speakVersion);
-      return;
-    }
-  }
+  /* === 手机端策略（恢复v8核心逻辑）=== */
+  /* 百度翻译TTS(中文优先) + 有道词典TTS(英文优先)，互相降级 */
+  var baiduUrl='https://fanyi.baidu.com/gettts?lan='+(isEn?'en':'zh')+'&text='+encodeURIComponent(text)+'&spd=3&source=web';
+  var youdaoUrl='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type='+(isEn?'2':'1')+(isEn?'&le=eng':'&le=zh');
+  /* 中文优先百度，英文优先有道（v8策略） */
+  var url1=isEn?youdaoUrl:baiduUrl;
+  var url2=isEn?baiduUrl:youdaoUrl;
 
-  /* 英文：直接有道TTS */
-  var youdaoUrl='https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(text)+'&type=2&le=eng';
-  _playOnce(youdaoUrl,8000).catch(function(){
-    tryNative(text,lang);
+  _playOnce(url1).catch(function(){
+    _playOnce(url2).catch(function(){
+      /* 两个都失败，中文走有道拆分降级 */
+      if(!isEn){
+        var groups=_splitZhGroups(text);
+        if(groups.length>0){_speakGroups(groups,0,_speakVersion);return;}
+      }
+      tryNative(text,lang);
+    });
   });
 }
 
